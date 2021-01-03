@@ -1,24 +1,14 @@
 import asyncio
-from typing import Callable, List, Type
+from typing import Optional, Type, Union
 
 from aio_pika import Message, RobustConnection, connect_robust
 from aio_pika.connection import ConnectionType
-
-# from aio_pika.robust_exchange import RobustExchange
+from aio_pika.exchange import ExchangeType
 from aio_pika.types import TimeoutType
-
-# class Consumer:
-#     ...
+from aiormq.types import ConfirmationFrameType
 
 
-# class Publisher:
-#     ...
-
-
-class RabbitMQClient:
-    # consumers: List[Consumer]
-    # publishers: List[Publisher]
-
+class RabbitMQ:
     def __init__(
         self,
         url: str = None,
@@ -34,7 +24,8 @@ class RabbitMQClient:
         timeout: TimeoutType = None,
         connection_class: Type[ConnectionType] = RobustConnection,
         client_properties: dict = None,
-        **kwargs
+        # exchangers: Dict[str, Dict[str, Any]] = None,
+        **kwargs,
     ):
         self.url = url
         self.host = host
@@ -48,6 +39,7 @@ class RabbitMQClient:
         self.timeout = timeout
         self.connection_class = connection_class
         self.client_properties = client_properties
+        # self.exchangers = exchangers or {}
         self.kwargs = kwargs
 
     async def connect(self):
@@ -64,18 +56,56 @@ class RabbitMQClient:
             timeout=self.timeout,
             connection_class=self.connection_class,
             client_properties=self.client_properties,
-            **self.kwargs
+            **self.kwargs,
         )
-        return self.connection
+        return self
 
     def __await__(self):
         return self.connect().__await__()
 
-    # def on_publish(self, exchange: RobustExchange):
-    #     def publish_handler(function: Callable):
-    #         ...
+    async def include_exchange(
+        self,
+        name: str,
+        type: Union[ExchangeType, str] = ExchangeType.DIRECT,
+        durable: bool = None,
+        auto_delete: bool = False,
+        internal: bool = False,
+        passive: bool = False,
+        arguments: dict = None,
+        timeout: TimeoutType = None,
+    ):
+        async with self.connection.channel() as channel:
+            await channel.declare_exchange(
+                name, type, durable, auto_delete, internal, passive, arguments, timeout
+            )
 
-    #     return publish_handler
+    async def publish(
+        self,
+        message: Message,
+        routing_key: str,
+        exchange_name: str = "",
+        *,
+        mandatory: bool = True,
+        immediate: bool = False,
+        timeout: TimeoutType = None,
+    ) -> Optional[ConfirmationFrameType]:
+        async with self.connection.channel() as channel:
+            if exchange_name:
+                exchange = await channel.get_exchange(exchange_name)
+                await exchange.publish(
+                    message,
+                    routing_key,
+                    mandatory=mandatory,
+                    immediate=immediate,
+                    timeout=timeout,
+                )
+            return await channel.default_exchange.publish(
+                message,
+                routing_key,
+                mandatory=mandatory,
+                immediate=immediate,
+                timeout=timeout,
+            )
 
     # def on_consume(self, no_ack: bool):
     #     def consume_handler(function: Callable):
@@ -88,12 +118,11 @@ class RabbitMQClient:
 
 
 async def main():
-    rabbit = await RabbitMQClient(host="localhost", port=5672)
-    print(rabbit)
-
-    # @rabbit.on_consume()
-    # def consume_test():
-    #     print("hi")
+    rabbit = await RabbitMQ(host="localhost", port=5672)
+    await rabbit.include_exchange("logs")
+    await rabbit.publish(
+        Message(body=b"Hello World!"), routing_key="info", exchange_name="logs"
+    )
 
 
 if __name__ == "__main__":
